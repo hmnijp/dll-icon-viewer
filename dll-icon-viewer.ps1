@@ -51,6 +51,27 @@ public class NativeIcon {
         return sizes;
     }
 
+    [DllImport("shell32.dll", CharSet = CharSet.Auto, EntryPoint = "ExtractIconEx")]
+    public static extern uint ExtractIconExBatch(string szFileName, int nIconIndex, [Out] IntPtr[] phiconLarge, [Out] IntPtr[] phiconSmall, uint nIcons);
+
+    public static int ExtractIconsLarge(string filePath, int startIndex, IntPtr[] icons, int count) {
+        IntPtr[] small = new IntPtr[count];
+        uint ret = ExtractIconExBatch(filePath, startIndex, icons, small, (uint)count);
+        for (int i = 0; i < (int)ret; i++) {
+            if (small[i] != IntPtr.Zero) DestroyIcon(small[i]);
+        }
+        return (int)ret;
+    }
+
+    public static int ExtractIconsSmall(string filePath, int startIndex, IntPtr[] icons, int count) {
+        IntPtr[] large = new IntPtr[count];
+        uint ret = ExtractIconExBatch(filePath, startIndex, large, icons, (uint)count);
+        for (int i = 0; i < (int)ret; i++) {
+            if (large[i] != IntPtr.Zero) DestroyIcon(large[i]);
+        }
+        return (int)ret;
+    }
+
     public static void SavePngAsIco(string outputPath, byte[] pngBytes, int size) {
         byte w = size >= 256 ? (byte)0 : (byte)size;
         byte h = size >= 256 ? (byte)0 : (byte)size;
@@ -375,43 +396,54 @@ function Load-DllIcons {
             return
         }
 
-    $global:currentFileName = [System.IO.Path]::GetFileName($filePath)
-    $progressBar.Maximum = $count
-    $batchSize = 15
-    $current = 0
+        $global:currentFileName = [System.IO.Path]::GetFileName($filePath)
+        $progressBar.Maximum = $count
 
-    while ($current -lt $count) {
-        if ($global:cancelLoad) { break }
-        $end = [Math]::Min($current + $batchSize, $count)
+        $flowPanel.SuspendLayout()
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $extractBatch = 256
+        $batchStart = 0
 
-        for ($i = $current; $i -lt $end; $i++) {
+        while ($batchStart -lt $count) {
             if ($global:cancelLoad) { break }
+            $remaining = $count - $batchStart
+            $batchCount = [Math]::Min($extractBatch, $remaining)
 
+            $icons = New-Object IntPtr[] $batchCount
             if ($useLarge) {
-                $hIcon = [NativeIcon]::ExtractLargeIcon($filePath, $i)
+                $extracted = [NativeIcon]::ExtractIconsLarge($filePath, $batchStart, $icons, $batchCount)
             } else {
-                $hIcon = [NativeIcon]::ExtractSmallIcon($filePath, $i)
+                $extracted = [NativeIcon]::ExtractIconsSmall($filePath, $batchStart, $icons, $batchCount)
             }
 
-            if ($hIcon -ne [IntPtr]::Zero) {
-                $iconObj = [System.Drawing.Icon]::FromHandle($hIcon)
-                $bmp = $iconObj.ToBitmap()
-                $null = [NativeIcon]::DestroyIcon($hIcon)
+            for ($i = 0; $i -lt $extracted; $i++) {
+                if ($global:cancelLoad) { break }
+                $hIcon = $icons[$i]
+                if ($hIcon -ne [IntPtr]::Zero) {
+                    $iconObj = [System.Drawing.Icon]::FromHandle($hIcon)
+                    $bmp = $iconObj.ToBitmap()
+                    $null = [NativeIcon]::DestroyIcon($hIcon)
 
-                if ($displaySize -ne $sourceSize) {
-                    $bmp = Scale-Bitmap $bmp $displaySize
+                    if ($displaySize -ne $sourceSize) {
+                        $bmp = Scale-Bitmap $bmp $displaySize
+                    }
+                    Add-IconCell $bmp ($batchStart + $i).ToString() $displaySize $global:currentFileName
                 }
-                Add-IconCell $bmp $i.ToString() $displaySize $global:currentFileName
             }
-        }
 
-            $current = $end
-            $progressBar.Value = $current
-            $lblProgress.Text = "$current / $count"
-            [System.Windows.Forms.Application]::DoEvents()
+            $batchStart += $extractBatch
+            $progressBar.Value = [Math]::Min($batchStart, $count)
+            $lblProgress.Text = "$([Math]::Min($batchStart, $count)) / $count"
+
+            if ($stopwatch.ElapsedMilliseconds -gt 200) {
+                [System.Windows.Forms.Application]::DoEvents()
+                $stopwatch.Restart()
+            }
         }
     } catch {
         [System.Windows.Forms.MessageBox]::Show("Ошибка: $_", "Ошибка", "OK", "Error")
+    } finally {
+        $flowPanel.ResumeLayout()
     }
 }
 
@@ -431,9 +463,12 @@ function Load-IcoFile {
             return
         }
 
-    $global:currentFileName = [System.IO.Path]::GetFileName($filePath)
-    $progressBar.Maximum = $sizes.Length
+        $global:currentFileName = [System.IO.Path]::GetFileName($filePath)
+        $progressBar.Maximum = $sizes.Length
         $progressBar.Value = 0
+
+        $flowPanel.SuspendLayout()
+        $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
         for ($i = 0; $i -lt $sizes.Length; $i++) {
             if ($global:cancelLoad) { break }
@@ -449,10 +484,16 @@ function Load-IcoFile {
 
             $progressBar.Value = $i + 1
             $lblProgress.Text = "{0} / {1}" -f ($i + 1), $sizes.Length
-            [System.Windows.Forms.Application]::DoEvents()
+
+            if ($stopwatch.ElapsedMilliseconds -gt 200) {
+                [System.Windows.Forms.Application]::DoEvents()
+                $stopwatch.Restart()
+            }
         }
     } catch {
         [System.Windows.Forms.MessageBox]::Show("Ошибка: $_", "Ошибка", "OK", "Error")
+    } finally {
+        $flowPanel.ResumeLayout()
     }
 }
 
@@ -473,15 +514,18 @@ function Load-ImageFile {
             $bmp = Scale-Bitmap $bmp $displaySize
         }
 
-    $global:currentFileName = [System.IO.Path]::GetFileName($filePath)
-    $progressBar.Maximum = 1
-    $progressBar.Value = 1
-    $lblProgress.Text = "1 / 1"
-    [System.Windows.Forms.Application]::DoEvents()
+        $global:currentFileName = [System.IO.Path]::GetFileName($filePath)
+        $progressBar.Maximum = 1
+        $progressBar.Value = 1
+        $lblProgress.Text = "1 / 1"
+        [System.Windows.Forms.Application]::DoEvents()
 
-    Add-IconCell $bmp $label $displaySize $global:currentFileName
+        $flowPanel.SuspendLayout()
+        Add-IconCell $bmp $label $displaySize $global:currentFileName
     } catch {
         [System.Windows.Forms.MessageBox]::Show("Ошибка: $_", "Ошибка", "OK", "Error")
+    } finally {
+        $flowPanel.ResumeLayout()
     }
 }
 
