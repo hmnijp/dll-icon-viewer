@@ -1,10 +1,11 @@
 # **DLL Icon Viewer**
 
-![screenshot](screenshot.jpg)
-
 A lightweight, portable Windows application for browsing and extracting icons from:
 DLL, EXE, ICL, CPL, SCR, OCX, ICO, PNG, JPG, and BMP files.
 No installation required.
+
+![screenshot](screenshot.jpg)
+
 
 ## Features
 
@@ -18,18 +19,20 @@ No installation required.
 
 ## How to Run
 
-### 1. PowerShell (direct)
+###   PowerShell (direct)
 ```powershell
 powershell -ExecutionPolicy Bypass -File "dll-icon-viewer.ps1"
 ```
-### 2. Right-click → "Run with PowerShell"
+###   Right-click → "Run with PowerShell"
 Right-click `dll-icon-viewer.ps1` in Explorer and select **Run with PowerShell**.
 
-### 3. Batch file
+###   Batch file
 Double-click `dll-icon-viewer.bat` — launches silently with a hidden PowerShell window.
 
-### 3. Compiled executable
+###   Compiled executable
 Double-click `dll-icon-viewer.exe` — fully standalone, no console window.
+
+
 
 ## How to Build
 

@@ -271,8 +271,7 @@ function Scale-Bitmap {
     if ($src.Width -eq $size -and $src.Height -eq $size) { return $src }
     $result = New-Object System.Drawing.Bitmap($size, $size)
     $g = [System.Drawing.Graphics]::FromImage($result)
-    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-    $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::Bilinear
     $g.DrawImage($src, 0, 0, $size, $size)
     $g.Dispose()
     if ($src.Width -ne $size -or $src.Height -ne $size) { $src.Dispose() }
@@ -281,15 +280,17 @@ function Scale-Bitmap {
 
 function Write-Timing {
     param([string]$label, [long]$ms)
-    Write-Debug "$label`: $ms ms"
+    [System.Diagnostics.Debug]::WriteLine("$label`: $ms ms")
 }
 
 function Clear-FlowPanel {
     foreach ($ctrl in $flowPanel.Controls) {
         if ($ctrl -is [System.Windows.Forms.Panel]) {
+            $ctrl.ContextMenuStrip = $null
             foreach ($child in $ctrl.Controls) {
                 if ($child -is [System.Windows.Forms.PictureBox] -and $child.Image) {
                     $child.Image.Dispose()
+                    $child.Image = $null
                 }
             }
         }
@@ -303,14 +304,11 @@ function ReRender-FromCache {
     Clear-FlowPanel
     $flowPanel.SuspendLayout()
     $swTotal = [System.Diagnostics.Stopwatch]::StartNew()
-    $swScale = 0
     try {
         for ($i = 0; $i -lt $global:iconCache.Count; $i++) {
             $src = $global:iconCache[$i]
             if ($src.Width -ne $displaySize) {
-                $swS = [System.Diagnostics.Stopwatch]::StartNew()
                 $scaled = Scale-Bitmap ($src.Clone()) $displaySize
-                $swScale += $swS.ElapsedMilliseconds
             } else {
                 $scaled = $src.Clone()
             }
@@ -318,12 +316,104 @@ function ReRender-FromCache {
         }
     } finally {
         $total = $swTotal.ElapsedMilliseconds
-        Write-Timing "ReRender-FromCache (total)" $total
-        Write-Timing "  scale" $swScale
+        Write-Timing "ReRender-FromCache" $total
         $lblProgress.Text = "Готово за ${total}ms"
         $flowPanel.ResumeLayout()
         $flowPanel.Visible = $true
+
+        if ($global:renderTimer) { $global:renderTimer.Stop(); $global:renderTimer.Dispose() }
+        $global:renderSw = [System.Diagnostics.Stopwatch]::StartNew()
+        $global:renderTimer = New-Object System.Windows.Forms.Timer
+        $global:renderTimer.Interval = 1
+        $global:renderTimer.Add_Tick({
+            $global:renderTimer.Stop()
+            $global:renderTimer.Dispose()
+            $global:renderTimer = $null
+            if (-not $global:cancelLoad) {
+                $renderMs = $global:renderSw.ElapsedMilliseconds
+                Write-Timing "Paint" $renderMs
+                $lblProgress.Text = $lblProgress.Text + " (рендер ${renderMs}ms)"
+            }
+        })
+        $global:renderTimer.Start()
     }
+}
+
+if (-not $global:sharedContextMenu) {
+    $global:sharedContextMenu = New-Object System.Windows.Forms.ContextMenuStrip
+
+    $mSave = $global:sharedContextMenu.Items.Add("Save PNG")
+    $mSave.Add_Click({
+        $d = $this.Owner.SourceControl.Tag
+        $sfd = New-Object System.Windows.Forms.SaveFileDialog
+        $sfd.Filter = "PNG|*.png|BMP|*.bmp|ICO|*.ico"
+        $sfd.FileName = "$($d.FileName)-$($d.Label).png"
+        if ($sfd.ShowDialog() -eq "OK") {
+            $ext = [System.IO.Path]::GetExtension($sfd.FileName).ToLower()
+            if ($ext -eq ".ico") {
+                $icoBytes = Get-IcoBytes $d.Bitmap
+                [NativeIcon]::SavePngAsIco($sfd.FileName, $icoBytes, $d.Bitmap.Width)
+            } else {
+                $fmt = if ($ext -eq ".bmp") { [System.Drawing.Imaging.ImageFormat]::Bmp } else { [System.Drawing.Imaging.ImageFormat]::Png }
+                $d.Bitmap.Save($sfd.FileName, $fmt)
+            }
+        }
+    })
+
+    $mCopyPng = $global:sharedContextMenu.Items.Add("Copy PNG")
+    $mCopyPng.Add_Click({
+        $d = $this.Owner.SourceControl.Tag
+        [System.Windows.Forms.Clipboard]::SetImage($d.Bitmap)
+    })
+
+    $mBmp = $global:sharedContextMenu.Items.Add("BMP")
+    $mBmp.Add_Click({
+        $d = $this.Owner.SourceControl.Tag
+        [System.Windows.Forms.Clipboard]::SetImage($d.Bitmap)
+    })
+
+    $mIco = $global:sharedContextMenu.Items.Add("ICO")
+    $mIco.Add_Click({
+        $d = $this.Owner.SourceControl.Tag
+        $temp = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "icon-$($d.FileName)-$($d.Label).ico")
+        $icoBytes = Get-IcoBytes $d.Bitmap
+        [NativeIcon]::SavePngAsIco($temp, $icoBytes, $d.Bitmap.Width)
+        $files = New-Object System.Collections.Specialized.StringCollection
+        $files.Add($temp)
+        [System.Windows.Forms.Clipboard]::SetFileDropList($files)
+    })
+
+    $null = $global:sharedContextMenu.Items.Add("-")
+
+    $mB64 = $global:sharedContextMenu.Items.Add("base64")
+    $mB64.Add_Click({
+        $d = $this.Owner.SourceControl.Tag
+        $bytes = Get-IcoBytes $d.Bitmap
+        $b64 = [System.Convert]::ToBase64String($bytes)
+        [System.Windows.Forms.Clipboard]::SetText("data:image/png;base64,$b64")
+    })
+
+    $mHtml = $global:sharedContextMenu.Items.Add("HTML")
+    $mHtml.Add_Click({
+        $d = $this.Owner.SourceControl.Tag
+        $bytes = Get-IcoBytes $d.Bitmap
+        $b64 = [System.Convert]::ToBase64String($bytes)
+        [System.Windows.Forms.Clipboard]::SetText("<img src=""data:image/png;base64,$b64"" />")
+    })
+
+    $null = $global:sharedContextMenu.Items.Add("-")
+
+    $mIdx = $global:sharedContextMenu.Items.Add("Индекс")
+    $mIdx.Add_Click({
+        $d = $this.Owner.SourceControl.Tag
+        [System.Windows.Forms.Clipboard]::SetText($d.Label)
+    })
+
+    $mFull = $global:sharedContextMenu.Items.Add("Ссылка")
+    $mFull.Add_Click({
+        $d = $this.Owner.SourceControl.Tag
+        [System.Windows.Forms.Clipboard]::SetText("$($d.FileName),$($d.Label)")
+    })
 }
 
 function Add-IconCell {
@@ -337,6 +427,7 @@ function Add-IconCell {
     $cellPanel = New-Object System.Windows.Forms.Panel
     $cellPanel.Size = New-Object System.Drawing.Size($cellW, $cellH)
     $cellPanel.Margin = New-Object System.Windows.Forms.Padding(2)
+    $cellPanel.Tag = @{Bitmap = $bmp; Label = $labelText; FileName = $fileName}
 
     $pb = New-Object System.Windows.Forms.PictureBox
     $pb.Size = New-Object System.Drawing.Size($displaySize, $displaySize)
@@ -354,84 +445,7 @@ function Add-IconCell {
     $cellPanel.Controls.Add($pb)
     $cellPanel.Controls.Add($lbl)
 
-    $ctx = New-Object System.Windows.Forms.ContextMenuStrip
-
-    $mSave = $ctx.Items.Add("Save PNG")
-    $mSave.Tag = @{Bitmap = $bmp; Label = $labelText; FileName = $fileName}
-    $mSave.Add_Click({
-        $d = $this.Tag
-        $sfd = New-Object System.Windows.Forms.SaveFileDialog
-        $sfd.Filter = "PNG|*.png|BMP|*.bmp|ICO|*.ico"
-        $sfd.FileName = "$($d.FileName)-$($d.Label).png"
-        if ($sfd.ShowDialog() -eq "OK") {
-            $ext = [System.IO.Path]::GetExtension($sfd.FileName).ToLower()
-            if ($ext -eq ".ico") {
-                $icoBytes = Get-IcoBytes $d.Bitmap
-                [NativeIcon]::SavePngAsIco($sfd.FileName, $icoBytes, $d.Bitmap.Width)
-            } else {
-                $fmt = if ($ext -eq ".bmp") { [System.Drawing.Imaging.ImageFormat]::Bmp } else { [System.Drawing.Imaging.ImageFormat]::Png }
-                $d.Bitmap.Save($sfd.FileName, $fmt)
-            }
-        }
-    })
-
-    $mCopyPng = $ctx.Items.Add("Copy PNG")
-    $mCopyPng.Tag = $bmp
-    $mCopyPng.Add_Click({
-        [System.Windows.Forms.Clipboard]::SetImage($this.Tag)
-    })
-
-    $mBmp = $ctx.Items.Add("BMP")
-    $mBmp.Tag = $bmp
-    $mBmp.Add_Click({
-        [System.Windows.Forms.Clipboard]::SetImage($this.Tag)
-    })
-
-    $mIco = $ctx.Items.Add("ICO")
-    $mIco.Tag = @{Bitmap = $bmp; Label = $labelText; FileName = $fileName}
-    $mIco.Add_Click({
-        $d = $this.Tag
-        $temp = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "icon-$($d.FileName)-$($d.Label).ico")
-        $icoBytes = Get-IcoBytes $d.Bitmap
-        [NativeIcon]::SavePngAsIco($temp, $icoBytes, $d.Bitmap.Width)
-        $files = New-Object System.Collections.Specialized.StringCollection
-        $files.Add($temp)
-        [System.Windows.Forms.Clipboard]::SetFileDropList($files)
-    })
-
-    $ctx.Items.Add("-")
-
-    $mB64 = $ctx.Items.Add("base64")
-    $mB64.Tag = $bmp
-    $mB64.Add_Click({
-        $bytes = Get-IcoBytes $this.Tag
-        $b64 = [System.Convert]::ToBase64String($bytes)
-        [System.Windows.Forms.Clipboard]::SetText("data:image/png;base64,$b64")
-    })
-
-    $mHtml = $ctx.Items.Add("HTML")
-    $mHtml.Tag = $bmp
-    $mHtml.Add_Click({
-        $bytes = Get-IcoBytes $this.Tag
-        $b64 = [System.Convert]::ToBase64String($bytes)
-        [System.Windows.Forms.Clipboard]::SetText("<img src=""data:image/png;base64,$b64"" />")
-    })
-
-    $ctx.Items.Add("-")
-
-    $mIdx = $ctx.Items.Add("""$labelText""")
-    $mIdx.Tag = $labelText
-    $mIdx.Add_Click({
-        [System.Windows.Forms.Clipboard]::SetText($this.Tag)
-    })
-
-    $mFull = $ctx.Items.Add("""$fileName,$labelText""")
-    $mFull.Tag = "$fileName,$labelText"
-    $mFull.Add_Click({
-        [System.Windows.Forms.Clipboard]::SetText($this.Tag)
-    })
-
-    $cellPanel.ContextMenuStrip = $ctx
+    $cellPanel.ContextMenuStrip = $global:sharedContextMenu
     $flowPanel.Controls.Add($cellPanel)
 }
 
@@ -471,9 +485,7 @@ function Load-DllIcons {
                 Add-IconCell $scaled $i.ToString() $displaySize $global:currentFileName
                 $progressBar.Value = $i + 1
                 $lblProgress.Text = "$($i + 1) / $count"
-                if ($i % 50 -eq 0) {
-                    [System.Windows.Forms.Application]::DoEvents()
-                }
+                if ($i % 50 -eq 0) { [System.Windows.Forms.Application]::DoEvents() }
             }
             $script:uiTime = $swUi.ElapsedMilliseconds
             $flowPanel.ResumeLayout()
@@ -551,7 +563,6 @@ function Load-DllIcons {
 
         $total = $global:totalTimer.ElapsedMilliseconds
         Write-Timing "Full load (total)" $total
-        Write-Timing "  GetIconCount" $swCount.ElapsedMilliseconds
         Write-Timing "  ExtractIconEx" $script:extractTime
         Write-Timing "  Icon->Bitmap" $script:convertTime
         Write-Timing "  Scale" $script:scaleTime
@@ -706,6 +717,22 @@ function Load-Icons {
     $progressPanel.Visible = $false
     $flowPanel.Visible = $true
     [System.Windows.Forms.Application]::DoEvents()
+
+    if ($global:renderTimer) { $global:renderTimer.Stop(); $global:renderTimer.Dispose() }
+    $global:renderSw = [System.Diagnostics.Stopwatch]::StartNew()
+    $global:renderTimer = New-Object System.Windows.Forms.Timer
+    $global:renderTimer.Interval = 1
+    $global:renderTimer.Add_Tick({
+        $global:renderTimer.Stop()
+        $global:renderTimer.Dispose()
+        $global:renderTimer = $null
+        if (-not $global:cancelLoad) {
+            $renderMs = $global:renderSw.ElapsedMilliseconds
+            Write-Timing "Paint" $renderMs
+            $lblProgress.Text = $lblProgress.Text + " (рендер ${renderMs}ms)"
+        }
+    })
+    $global:renderTimer.Start()
 }
 
 $form.Add_Shown({
