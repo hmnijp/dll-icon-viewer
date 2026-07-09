@@ -279,6 +279,11 @@ function Scale-Bitmap {
     return $result
 }
 
+function Write-Timing {
+    param([string]$label, [long]$ms)
+    Write-Debug "$label`: $ms ms"
+}
+
 function Clear-FlowPanel {
     foreach ($ctrl in $flowPanel.Controls) {
         if ($ctrl -is [System.Windows.Forms.Panel]) {
@@ -297,17 +302,25 @@ function ReRender-FromCache {
     $flowPanel.Visible = $false
     Clear-FlowPanel
     $flowPanel.SuspendLayout()
+    $swTotal = [System.Diagnostics.Stopwatch]::StartNew()
+    $swScale = 0
     try {
         for ($i = 0; $i -lt $global:iconCache.Count; $i++) {
             $src = $global:iconCache[$i]
             if ($src.Width -ne $displaySize) {
+                $swS = [System.Diagnostics.Stopwatch]::StartNew()
                 $scaled = Scale-Bitmap ($src.Clone()) $displaySize
+                $swScale += $swS.ElapsedMilliseconds
             } else {
                 $scaled = $src.Clone()
             }
             Add-IconCell $scaled $i.ToString() $displaySize $global:currentFileName
         }
     } finally {
+        $total = $swTotal.ElapsedMilliseconds
+        Write-Timing "ReRender-FromCache (total)" $total
+        Write-Timing "  scale" $swScale
+        $lblProgress.Text = "Готово за ${total}ms"
         $flowPanel.ResumeLayout()
         $flowPanel.Visible = $true
     }
@@ -428,6 +441,12 @@ function Load-DllIcons {
     $scaleIdx = $cmbScale.SelectedIndex
     $displaySize = $scaleSizes[$scaleIdx]
 
+    $global:totalTimer = [System.Diagnostics.Stopwatch]::StartNew()
+    $script:extractTime = 0
+    $script:convertTime = 0
+    $script:scaleTime = 0
+    $script:uiTime = 0
+
     $progressPanel.Visible = $true
     $progressBar.Value = 0
     [System.Windows.Forms.Application]::DoEvents()
@@ -438,11 +457,14 @@ function Load-DllIcons {
             $count = $global:iconCache.Count
             $progressBar.Maximum = $count
             $flowPanel.SuspendLayout()
+            $swUi = [System.Diagnostics.Stopwatch]::StartNew()
             for ($i = 0; $i -lt $count; $i++) {
                 if ($global:cancelLoad) { break }
                 $src = $global:iconCache[$i]
                 if ($src.Width -ne $displaySize) {
+                    $swS = [System.Diagnostics.Stopwatch]::StartNew()
                     $scaled = Scale-Bitmap ($src.Clone()) $displaySize
+                    $script:scaleTime += $swS.ElapsedMilliseconds
                 } else {
                     $scaled = $src.Clone()
                 }
@@ -453,12 +475,20 @@ function Load-DllIcons {
                     [System.Windows.Forms.Application]::DoEvents()
                 }
             }
+            $script:uiTime = $swUi.ElapsedMilliseconds
             $flowPanel.ResumeLayout()
+            $total = $global:totalTimer.ElapsedMilliseconds
+            Write-Timing "Cache re-render (total)" $total
+            Write-Timing "  scale" $script:scaleTime
+            Write-Timing "  ui" $script:uiTime
+            $lblProgress.Text = "Готово за ${total}ms"
             return
         }
 
         # Cache miss: extract large (32x32) and cache
+        $swCount = [System.Diagnostics.Stopwatch]::StartNew()
         $count = [NativeIcon]::GetIconCount($filePath)
+        Write-Timing "GetIconCount" $swCount.ElapsedMilliseconds
         if ($count -le 0) {
             [System.Windows.Forms.MessageBox]::Show("Не удалось получить количество иконок из файла.", "Информация", "OK", "Information")
             $progressPanel.Visible = $false
@@ -480,23 +510,32 @@ function Load-DllIcons {
             $remaining = $count - $batchStart
             $batchCount = [Math]::Min($extractBatch, $remaining)
 
+            $swExtract = [System.Diagnostics.Stopwatch]::StartNew()
             $icons = New-Object IntPtr[] $batchCount
             $extracted = [NativeIcon]::ExtractIconsLarge($filePath, $batchStart, $icons, $batchCount)
+            $script:extractTime += $swExtract.ElapsedMilliseconds
 
             for ($i = 0; $i -lt $extracted; $i++) {
                 if ($global:cancelLoad) { break }
                 $hIcon = $icons[$i]
                 if ($hIcon -ne [IntPtr]::Zero) {
+                    $swConv = [System.Diagnostics.Stopwatch]::StartNew()
                     $iconObj = [System.Drawing.Icon]::FromHandle($hIcon)
                     $bmp = $iconObj.ToBitmap()
                     $null = [NativeIcon]::DestroyIcon($hIcon)
+                    $script:convertTime += $swConv.ElapsedMilliseconds
 
                     $global:iconCache += $bmp.Clone()
 
                     if ($displaySize -ne 32) {
+                        $swScale = [System.Diagnostics.Stopwatch]::StartNew()
                         $bmp = Scale-Bitmap $bmp $displaySize
+                        $script:scaleTime += $swScale.ElapsedMilliseconds
                     }
+
+                    $swUi = [System.Diagnostics.Stopwatch]::StartNew()
                     Add-IconCell $bmp ($batchStart + $i).ToString() $displaySize $global:currentFileName
+                    $script:uiTime += $swUi.ElapsedMilliseconds
                 }
             }
 
@@ -509,6 +548,15 @@ function Load-DllIcons {
                 $stopwatch.Restart()
             }
         }
+
+        $total = $global:totalTimer.ElapsedMilliseconds
+        Write-Timing "Full load (total)" $total
+        Write-Timing "  GetIconCount" $swCount.ElapsedMilliseconds
+        Write-Timing "  ExtractIconEx" $script:extractTime
+        Write-Timing "  Icon->Bitmap" $script:convertTime
+        Write-Timing "  Scale" $script:scaleTime
+        Write-Timing "  Add-IconCell" $script:uiTime
+        $lblProgress.Text = "Готово за ${total}ms"
     } catch {
         [System.Windows.Forms.MessageBox]::Show("Ошибка: $_", "Ошибка", "OK", "Error")
     } finally {
@@ -524,8 +572,14 @@ function Load-IcoFile {
     $progressPanel.Visible = $true
     [System.Windows.Forms.Application]::DoEvents()
 
+    $global:totalTimer = [System.Diagnostics.Stopwatch]::StartNew()
+    $script:scaleTime = 0
+    $script:uiTime = 0
+
     try {
+        $swSizes = [System.Diagnostics.Stopwatch]::StartNew()
         $sizes = [NativeIcon]::GetIcoSizes($filePath)
+        Write-Timing "GetIcoSizes" $swSizes.ElapsedMilliseconds
         if ($sizes.Length -eq 0) {
             [System.Windows.Forms.MessageBox]::Show("Не удалось прочитать иконки из файла.", "Информация", "OK", "Information")
             $progressPanel.Visible = $false
@@ -547,9 +601,13 @@ function Load-IcoFile {
             $ico.Dispose()
 
             if ($displaySize -ne $nativeSize) {
+                $swS = [System.Diagnostics.Stopwatch]::StartNew()
                 $bmp = Scale-Bitmap $bmp $displaySize
+                $script:scaleTime += $swS.ElapsedMilliseconds
             }
+            $swUi = [System.Diagnostics.Stopwatch]::StartNew()
             Add-IconCell $bmp "$nativeSize" $displaySize $global:currentFileName
+            $script:uiTime += $swUi.ElapsedMilliseconds
 
             $progressBar.Value = $i + 1
             $lblProgress.Text = "{0} / {1}" -f ($i + 1), $sizes.Length
@@ -559,6 +617,13 @@ function Load-IcoFile {
                 $stopwatch.Restart()
             }
         }
+
+        $total = $global:totalTimer.ElapsedMilliseconds
+        Write-Timing "Ico load (total)" $total
+        Write-Timing "  GetIcoSizes" $swSizes.ElapsedMilliseconds
+        Write-Timing "  Scale" $script:scaleTime
+        Write-Timing "  Add-IconCell" $script:uiTime
+        $lblProgress.Text = "Готово за ${total}ms"
     } catch {
         [System.Windows.Forms.MessageBox]::Show("Ошибка: $_", "Ошибка", "OK", "Error")
     } finally {
@@ -574,13 +639,18 @@ function Load-ImageFile {
     $progressPanel.Visible = $true
     [System.Windows.Forms.Application]::DoEvents()
 
+    $totalTimer = [System.Diagnostics.Stopwatch]::StartNew()
     try {
+        $swLoad = [System.Diagnostics.Stopwatch]::StartNew()
         $img = [System.Drawing.Image]::FromFile($filePath)
         $bmp = $img -as [System.Drawing.Bitmap]
         $label = [System.IO.Path]::GetExtension($filePath).ToUpper().TrimStart(".")
+        Write-Timing "Image.FromFile" $swLoad.ElapsedMilliseconds
 
         if ($bmp.Width -gt $displaySize -or $bmp.Height -gt $displaySize -or $bmp.Width -lt $displaySize) {
+            $swS = [System.Diagnostics.Stopwatch]::StartNew()
             $bmp = Scale-Bitmap $bmp $displaySize
+            Write-Timing "Scale" $swS.ElapsedMilliseconds
         }
 
         $global:currentFileName = [System.IO.Path]::GetFileName($filePath)
@@ -589,11 +659,16 @@ function Load-ImageFile {
         $lblProgress.Text = "1 / 1"
         [System.Windows.Forms.Application]::DoEvents()
 
+        $swUi = [System.Diagnostics.Stopwatch]::StartNew()
         $flowPanel.SuspendLayout()
         Add-IconCell $bmp $label $displaySize $global:currentFileName
+        Write-Timing "Add-IconCell" $swUi.ElapsedMilliseconds
     } catch {
         [System.Windows.Forms.MessageBox]::Show("Ошибка: $_", "Ошибка", "OK", "Error")
     } finally {
+        $total = $totalTimer.ElapsedMilliseconds
+        Write-Timing "Image load (total)" $total
+        $lblProgress.Text = "Готово за ${total}ms"
         $flowPanel.ResumeLayout()
     }
 }
