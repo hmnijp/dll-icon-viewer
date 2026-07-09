@@ -207,7 +207,11 @@ $cmbScale.Dock = "Fill"
 $cmbScale.Items.AddRange($scaleNames)
 $cmbScale.SelectedIndex = 1
 $cmbScale.Add_SelectedIndexChanged({
-    Load-Icons $txtPath.Text
+    if ($global:cachedFilePath -eq $txtPath.Text -and $global:iconCache.Count -gt 0) {
+        ReRender-FromCache
+    } else {
+        Load-Icons $txtPath.Text
+    }
 })
 
 $topPanel.Controls.Add($txtPath, 0, 0)
@@ -251,6 +255,8 @@ $form.Controls.Add($table)
 $global:cancelLoad = $false
 $global:lastDir = [System.IO.Path]::GetDirectoryName([Environment]::ExpandEnvironmentVariables("%SystemRoot%\System32\shell32.dll"))
 $global:currentFileName = "shell32.dll"
+$global:iconCache = @()
+$global:cachedFilePath = $null
 
 function Get-IcoBytes {
     param([System.Drawing.Bitmap]$bmp)
@@ -271,6 +277,40 @@ function Scale-Bitmap {
     $g.Dispose()
     if ($src.Width -ne $size -or $src.Height -ne $size) { $src.Dispose() }
     return $result
+}
+
+function Clear-FlowPanel {
+    foreach ($ctrl in $flowPanel.Controls) {
+        if ($ctrl -is [System.Windows.Forms.Panel]) {
+            foreach ($child in $ctrl.Controls) {
+                if ($child -is [System.Windows.Forms.PictureBox] -and $child.Image) {
+                    $child.Image.Dispose()
+                }
+            }
+        }
+    }
+    $flowPanel.Controls.Clear()
+}
+
+function ReRender-FromCache {
+    $displaySize = $scaleSizes[$cmbScale.SelectedIndex]
+    $flowPanel.Visible = $false
+    Clear-FlowPanel
+    $flowPanel.SuspendLayout()
+    try {
+        for ($i = 0; $i -lt $global:iconCache.Count; $i++) {
+            $src = $global:iconCache[$i]
+            if ($src.Width -ne $displaySize) {
+                $scaled = Scale-Bitmap ($src.Clone()) $displaySize
+            } else {
+                $scaled = $src.Clone()
+            }
+            Add-IconCell $scaled $i.ToString() $displaySize $global:currentFileName
+        }
+    } finally {
+        $flowPanel.ResumeLayout()
+        $flowPanel.Visible = $true
+    }
 }
 
 function Add-IconCell {
@@ -387,14 +427,37 @@ function Load-DllIcons {
 
     $scaleIdx = $cmbScale.SelectedIndex
     $displaySize = $scaleSizes[$scaleIdx]
-    $useLarge = ($scaleIdx -ge 1)
-    $sourceSize = if ($scaleIdx -eq 0) { 16 } else { 32 }
 
     $progressPanel.Visible = $true
     $progressBar.Value = 0
     [System.Windows.Forms.Application]::DoEvents()
 
     try {
+        # Cache hit: re-render from cache
+        if ($global:cachedFilePath -eq $filePath -and $global:iconCache.Count -gt 0) {
+            $count = $global:iconCache.Count
+            $progressBar.Maximum = $count
+            $flowPanel.SuspendLayout()
+            for ($i = 0; $i -lt $count; $i++) {
+                if ($global:cancelLoad) { break }
+                $src = $global:iconCache[$i]
+                if ($src.Width -ne $displaySize) {
+                    $scaled = Scale-Bitmap ($src.Clone()) $displaySize
+                } else {
+                    $scaled = $src.Clone()
+                }
+                Add-IconCell $scaled $i.ToString() $displaySize $global:currentFileName
+                $progressBar.Value = $i + 1
+                $lblProgress.Text = "$($i + 1) / $count"
+                if ($i % 50 -eq 0) {
+                    [System.Windows.Forms.Application]::DoEvents()
+                }
+            }
+            $flowPanel.ResumeLayout()
+            return
+        }
+
+        # Cache miss: extract large (32x32) and cache
         $count = [NativeIcon]::GetIconCount($filePath)
         if ($count -le 0) {
             [System.Windows.Forms.MessageBox]::Show("Не удалось получить количество иконок из файла.", "Информация", "OK", "Information")
@@ -403,11 +466,13 @@ function Load-DllIcons {
         }
 
         $global:currentFileName = [System.IO.Path]::GetFileName($filePath)
+        $global:cachedFilePath = $filePath
+        $global:iconCache = @()
         $progressBar.Maximum = $count
 
         $flowPanel.SuspendLayout()
         $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-        $extractBatch = 256
+        $extractBatch = 512
         $batchStart = 0
 
         while ($batchStart -lt $count) {
@@ -416,11 +481,7 @@ function Load-DllIcons {
             $batchCount = [Math]::Min($extractBatch, $remaining)
 
             $icons = New-Object IntPtr[] $batchCount
-            if ($useLarge) {
-                $extracted = [NativeIcon]::ExtractIconsLarge($filePath, $batchStart, $icons, $batchCount)
-            } else {
-                $extracted = [NativeIcon]::ExtractIconsSmall($filePath, $batchStart, $icons, $batchCount)
-            }
+            $extracted = [NativeIcon]::ExtractIconsLarge($filePath, $batchStart, $icons, $batchCount)
 
             for ($i = 0; $i -lt $extracted; $i++) {
                 if ($global:cancelLoad) { break }
@@ -430,7 +491,9 @@ function Load-DllIcons {
                     $bmp = $iconObj.ToBitmap()
                     $null = [NativeIcon]::DestroyIcon($hIcon)
 
-                    if ($displaySize -ne $sourceSize) {
+                    $global:iconCache += $bmp.Clone()
+
+                    if ($displaySize -ne 32) {
                         $bmp = Scale-Bitmap $bmp $displaySize
                     }
                     Add-IconCell $bmp ($batchStart + $i).ToString() $displaySize $global:currentFileName
@@ -547,9 +610,14 @@ function Load-Icons {
     [System.Windows.Forms.Application]::DoEvents()
     Start-Sleep -Milliseconds 50
 
-    $flowPanel.Controls.Clear()
+    Clear-FlowPanel
     $flowPanel.Visible = $false
     $global:cancelLoad = $false
+
+    if ($filePath -ne $global:cachedFilePath) {
+        $global:iconCache = @()
+        $global:cachedFilePath = $null
+    }
 
     $ext = [System.IO.Path]::GetExtension($filePath).ToLower()
     if ($ext -eq ".ico") {
