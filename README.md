@@ -1,4 +1,4 @@
-# DLL Icon Viewer
+# **DLL Icon Viewer**
 
 ![screenshot](screenshot.jpg)
 
@@ -12,8 +12,7 @@ A lightweight, portable Windows application for browsing and extracting icons fr
 - Copy icon as base64 data URI or HTML `<img>` tag
 - Quick-access dropdown with well-known Windows icon libraries
 - Supports multi-size `.ico` files (shows each size separately)
-- Progress bar during loading, cancelable
-- Window icon set from `shell32.dll`
+
 
 ## How to Run
 
@@ -22,7 +21,10 @@ A lightweight, portable Windows application for browsing and extracting icons fr
 powershell -ExecutionPolicy Bypass -File "dll-icon-viewer.ps1"
 ```
 
-### 2. Batch file
+### 2. Right-click → "Run with PowerShell"
+Right-click `dll-icon-viewer.ps1` in Explorer and select **Run with PowerShell**.
+
+### 3. Batch file
 Double-click `dll-icon-viewer.bat` — launches silently with a hidden PowerShell window.
 
 ### 3. Compiled executable
