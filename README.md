@@ -2,7 +2,9 @@
 
 ![screenshot](screenshot.jpg)
 
-A lightweight, portable Windows application for browsing and extracting icons from DLL, EXE, ICL, CPL, SCR, OCX, ICO, PNG, JPG, and BMP files. No installation required.
+A lightweight, portable Windows application for browsing and extracting icons from:
+DLL, EXE, ICL, CPL, SCR, OCX, ICO, PNG, JPG, and BMP files.
+No installation required.
 
 ## Features
 
@@ -20,7 +22,6 @@ A lightweight, portable Windows application for browsing and extracting icons fr
 ```powershell
 powershell -ExecutionPolicy Bypass -File "dll-icon-viewer.ps1"
 ```
-
 ### 2. Right-click → "Run with PowerShell"
 Right-click `dll-icon-viewer.ps1` in Explorer and select **Run with PowerShell**.
 
@@ -45,4 +46,4 @@ Invoke-ps2exe -InputFile "dll-icon-viewer.ps1" -OutputFile "dll-icon-viewer.exe"
 - `-noConsole` — hides the PowerShell console window
 - `-lcid 1049` — sets locale to Russian (remove or change as needed)
 
-The resulting `.exe` is portable and can be copied anywhere.
+The resulting `.exe` is portable and can be copied anywhere!

@@ -57,19 +57,25 @@ public class NativeIcon {
     public static int ExtractIconsLarge(string filePath, int startIndex, IntPtr[] icons, int count) {
         IntPtr[] small = new IntPtr[count];
         uint ret = ExtractIconExBatch(filePath, startIndex, icons, small, (uint)count);
-        for (int i = 0; i < (int)ret; i++) {
+        int extracted = (int)ret;
+        if (extracted < 0) extracted = 0;
+        if (extracted > count) extracted = count;
+        for (int i = 0; i < extracted; i++) {
             if (small[i] != IntPtr.Zero) DestroyIcon(small[i]);
         }
-        return (int)ret;
+        return extracted;
     }
 
     public static int ExtractIconsSmall(string filePath, int startIndex, IntPtr[] icons, int count) {
         IntPtr[] large = new IntPtr[count];
         uint ret = ExtractIconExBatch(filePath, startIndex, large, icons, (uint)count);
-        for (int i = 0; i < (int)ret; i++) {
+        int extracted = (int)ret;
+        if (extracted < 0) extracted = 0;
+        if (extracted > count) extracted = count;
+        for (int i = 0; i < extracted; i++) {
             if (large[i] != IntPtr.Zero) DestroyIcon(large[i]);
         }
-        return (int)ret;
+        return extracted;
     }
 
     public static void SavePngAsIco(string outputPath, byte[] pngBytes, int size) {
