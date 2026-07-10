@@ -403,16 +403,24 @@ if (-not $global:sharedContextMenu) {
 
     $null = $global:sharedContextMenu.Items.Add("-")
 
-    $mIdx = $global:sharedContextMenu.Items.Add("Индекс")
+    $mIdx = $global:sharedContextMenu.Items.Add("0")
     $mIdx.Add_Click({
         $d = $this.Owner.SourceControl.Tag
         [System.Windows.Forms.Clipboard]::SetText($d.Label)
     })
 
-    $mFull = $global:sharedContextMenu.Items.Add("Ссылка")
+    $mFull = $global:sharedContextMenu.Items.Add("file.dll,0")
     $mFull.Add_Click({
         $d = $this.Owner.SourceControl.Tag
         [System.Windows.Forms.Clipboard]::SetText("$($d.FileName),$($d.Label)")
+    })
+
+    $global:sharedContextMenu.Add_Opening({
+        $d = $this.SourceControl.Tag
+        if ($d) {
+            $mIdx.Text = $d.Label
+            $mFull.Text = "$($d.FileName),$($d.Label)"
+        }
     })
 }
 

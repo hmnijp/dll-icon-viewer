@@ -49,4 +49,6 @@ Invoke-ps2exe -InputFile "dll-icon-viewer.ps1" -OutputFile "dll-icon-viewer.exe"
 - `-noConsole` — hides the PowerShell console window
 - `-lcid 1049` — sets locale to Russian (remove or change as needed)
 
+Or just run `.\build.ps1` — it handles everything automatically.
+
 The resulting `.exe` is portable and can be copied anywhere!
